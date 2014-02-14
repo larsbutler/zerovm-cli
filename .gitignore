@@ -1,6 +1,5 @@
 *.pyc
 *.swp
-
 .coverage
 .tox
 htmlcov
