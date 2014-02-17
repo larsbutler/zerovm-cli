@@ -182,6 +182,9 @@ class Manifest(object):
         """
         Get the text representation of the manifest.
         """
+        if not self.channels:
+            raise RuntimeError("Manifest must have at least 1 channel.")
+
         manifest = MANIFEST_TEMPLATE
         manifest %= dict(
             node=self.node,
