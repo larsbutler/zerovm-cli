@@ -85,6 +85,9 @@ RND_READ_RND_WRITE = 3
 
 class Channel(object):
     """
+    Definition of a channel within a manifest. Defines a mapping from the host
+    to the ZeroVM filesystem, access type, and read/write limits.
+
     :param uri:
         Path to a local file, pipe, character device, tcp socket or host ID.
     :param alias:
