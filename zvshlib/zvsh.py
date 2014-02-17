@@ -29,6 +29,7 @@ import pty
 import threading
 import tty
 
+from os import path
 from subprocess import Popen, PIPE
 from tempfile import mkdtemp
 
@@ -60,6 +61,134 @@ shell clear
 c
 d br
 '''
+
+CHANNEL_TEMPLATE = 'Channel = %s'
+
+MANIFEST_TEMPLATE = """\
+Node = %(node)s
+Version = %(version)s
+Timeout = %(timeout)s
+Memory = %(memory)s
+Program = %(program)s
+%(channels)s"""
+
+GETS_DEFAULT = 4294967296
+GET_SIZE_DEFAULT_BYTES = 4294967296
+PUTS_DEFAULT = 4294967296
+PUT_SIZE_DEFAULT_BYTES = 4294967296
+
+SEQ_READ_SEQ_WRITE = 0
+RND_READ_SEQ_WRITE = 1
+SEQ_READ_RND_WRITE = 2
+RND_READ_RND_WRITE = 3
+
+
+class Channel(object):
+    """
+    :param uri:
+        Path to a local file, pipe, character device, tcp socket or host ID.
+    :param alias:
+        Path where this channel will be mounted in ZeroVM.
+    :param access_type:
+        Choose from the following:
+
+            * 0: sequential read/ sequential write
+            * 1: random read/ sequential write
+            * 2: sequential read / random write
+            * 3: random read / random write
+    :param etag:
+        etag switch; can be in the range 0..1
+
+        Default: 0
+    :param gets:
+        Limit for number of reads from this channel.
+
+        Default: 4294967296
+    :param get_size:
+        Limit on total amount of data to read from this channel, in bytes.
+
+        Default: 4294967296
+    :param puts:
+        Limit for number of writes to this channel.
+
+        Default: 4294967296
+    :param put_size:
+        Limit on total amount of data to be written to this channel, in bytes.
+
+        Default: 4294967296
+    """
+
+    def __init__(self, uri, alias, access_type,
+                 etag=0,
+                 gets=GETS_DEFAULT,
+                 get_size=GET_SIZE_DEFAULT_BYTES,
+                 puts=PUTS_DEFAULT,
+                 put_size=PUT_SIZE_DEFAULT_BYTES):
+        self.uri = uri
+        self.alias = alias
+        self.access_type = access_type
+        self.etag = etag
+        self.gets = gets
+        self.get_size = get_size
+        self.puts = puts
+        self.put_size = put_size
+
+    def __str__(self):
+        return 'Channel = %s,%s,%s,%s,%s,%s,%s,%s' % (
+            self.uri, self.alias, self.access_type, self.etag,
+            self.gets, self.get_size, self.puts, self.put_size
+        )
+
+
+class Manifest(object):
+    """
+    """
+
+    DEFAULT_NODE = 1
+
+    def __init__(self, version, timeout, memory, program, node=DEFAULT_NODE,
+                 etag=0, channels=None):
+        self.version = version
+        self.timeout = timeout
+        self.memory = memory
+        self.program = program
+
+        self.node = node
+        self.etag = etag
+
+        self.channels = channels
+        if self.channels is None:
+            self.channels = []
+
+    @classmethod
+    def default_manifest(cls, basedir, version, timeout, memory,
+                         program):
+        channels = [
+            Channel('/dev/stdin', '/dev/stdin', SEQ_READ_SEQ_WRITE, puts=0,
+                    put_size=0),
+            Channel(path.join(basedir, 'stdout.%s' % cls.DEFAULT_NODE),
+                    '/dev/stdout', SEQ_READ_SEQ_WRITE, gets=0, get_size=0),
+            Channel(path.join(basedir, 'stderr.%s' % cls.DEFAULT_NODE),
+                    '/dev/stderr', SEQ_READ_SEQ_WRITE, gets=0, get_size=0),
+            Channel(path.join(basedir, 'nvram.%s' % cls.DEFAULT_NODE),
+                    '/dev/nvram', RND_READ_RND_WRITE),
+        ]
+        return Manifest(version, timeout, memory, program, channels=channels)
+
+    def dumps(self):
+        """
+        Get the text representation of the manifest.
+        """
+        manifest = MANIFEST_TEMPLATE
+        manifest %= dict(
+            node=self.node,
+            version=self.version,
+            timeout=self.timeout,
+            memory='%s,%s' % (self.memory, self.etag),
+            program=self.program,
+            channels='\n'.join([str(c) for c in self.channels]),
+        )
+        return manifest
 
 
 class ZvArgs:
