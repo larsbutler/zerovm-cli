@@ -12,7 +12,11 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import ConfigParser
+try:
+    import configparser as ConfigParser
+except ImportError:
+    # Python 2 fallback
+    import ConfigParser
 import argparse
 import array
 import fcntl
@@ -71,6 +75,13 @@ Timeout = %(timeout)s
 Memory = %(memory)s
 Program = %(program)s
 %(channels)s"""
+
+MANIFEST_DEFAULTS = dict(
+    version='20130611',
+    memory=4294967296,
+    node=1,
+    timeout=50,
+)
 
 GETS_DEFAULT = 4294967296
 GET_SIZE_DEFAULT_BYTES = 4294967296
@@ -145,8 +156,9 @@ class Channel(object):
 
 class Manifest(object):
     """
+    Object representation of a ZeroVM manifest. Includes utilities and sane
+    defaults for generating manifest files.
     """
-
     DEFAULT_NODE = 1
 
     def __init__(self, version, timeout, memory, program, node=DEFAULT_NODE,
@@ -164,8 +176,7 @@ class Manifest(object):
             self.channels = []
 
     @classmethod
-    def default_manifest(cls, basedir, version, timeout, memory,
-                         program):
+    def default_manifest(cls, basedir, program):
         channels = [
             Channel('/dev/stdin', '/dev/stdin', SEQ_READ_SEQ_WRITE, puts=0,
                     put_size=0),
@@ -176,7 +187,11 @@ class Manifest(object):
             Channel(path.join(basedir, 'nvram.%s' % cls.DEFAULT_NODE),
                     '/dev/nvram', RND_READ_RND_WRITE),
         ]
-        return Manifest(version, timeout, memory, program, channels=channels)
+        return Manifest(MANIFEST_DEFAULTS['version'],
+                        MANIFEST_DEFAULTS['timeout'],
+                        MANIFEST_DEFAULTS['memory'],
+                        program,
+                        channels=channels)
 
     def dumps(self):
         """
@@ -196,8 +211,209 @@ class Manifest(object):
         )
         return manifest
 
+    def dump(self, fp):
+        fp.write(self.dumps())
+
+
+class NVRAM(object):
+    """
+    Object representation of a ZeroVM nvram file.
+    """
+
+    def __init__(self, cmdline_args, ):
+        pass
+
+
+def run_zerovm(zvconfig, zvargs):
+    """
+    :param zvconfig:
+        :class:`ZvConfig` instance.
+    :param zvargs:
+        :class:`ZvArgs` instance.
+    """
+    if zvargs.args.zvm_save_dir is None:
+        # use a temp dir
+        working_dir = mkdtemp()
+    else:
+        # use the specified dir
+        working_dir = path.abspath(path.expanduser(zvargs.args.zvm_save_dir))
+
+    if not path.exists(working_dir):
+        os.makedirs(working_dir)
+
+    # Manifest config options from the command line / zvsh.cfg
+    man_cfg = zvconfig['manifest']
+    node = man_cfg['Node']
+    processed_images = list(_process_images(zvargs.args.zvm_image))
+
+    # Search the tar images and extract the target nexe to the working
+    # directory
+    program_path = _extract_nexe(working_dir, node, processed_images,
+                                 zvargs.args.command)
+
+    # Write the manifest
+    manifest = Manifest.default_manifest(working_dir, program_path)
+    manifest.version = man_cfg['Version']
+    manifest.timeout = man_cfg['Timeout']
+    manifest.memory = man_cfg['Memory']
+    manifest.node = node
+    # TODO: add zvm_images to channels!
+
+    for i, (zvm_image, _, _) in enumerate(
+            processed_images, start=1):
+        mount_point = '/dev/%s.%s' % (i, path.basename(zvm_image))
+
+        ch = Channel(
+            zvm_image, mount_point, access_type=RND_READ_RND_WRITE,
+            gets=zvconfig['limits']['reads'],
+            get_size=zvconfig['limits']['rbytes'],
+            puts=zvconfig['limits']['writes'],
+            put_size=zvconfig['limits']['wbytes'],
+        )
+        manifest.channels.append(ch)
+
+    manifest_file = path.join(working_dir, 'manifest.%s' % node)
+    with open(manifest_file, 'w') as man_fp:
+        # TODO: check if this file exists first!
+        manifest.dump(man_fp)
+    # manifest_path = _write_manifest(working_dir, node, manifest)
+
+    # create nvram file
+    with open(path.join(working_dir, 'nvram.%s' % node), 'w') as nvr_fp:
+        _write_nvram(zvconfig, zvargs, processed_images, nvr_fp)
+    stdout = path.join(working_dir, 'stdout.%s' % node)
+    stderr = path.join(working_dir, 'stderr.%s' % node)
+    os.mkfifo(stdout)
+    os.mkfifo(stderr)
+
+    try:
+        zvm_run = ['zerovm', '-PQ']
+        if zvargs.args.zvm_trace:
+            trace_log = path.abspath('zvsh.trace.log')
+            zvm_run.extend(['-T', trace_log])
+        zvm_run.append(manifest_file)
+        runner = ZvRunner(zvm_run, stdout, stderr, working_dir,
+                          getrc=zvargs.args.zvm_getrc)
+        runner.run()
+    finally:
+        # If we're using a tempdir for the working files,
+        # destroy the directory to clean up.
+        if zvargs.args.zvm_save_dir is None:
+            shutil.rmtree(working_dir)
+
+
+def _process_images(zvm_images):
+    for image in zvm_images:
+        image_split = image.split(',')
+        # mount_dir and access_type are optional,
+        # so defaults are provided:
+        mount_dir = '/'
+        access_type = 'ro'
+
+        if len(image_split) == 1:
+            path = image_split[0]
+        elif len(image_split) == 2:
+            path, mount_dir = image_split
+        elif len(image_split) == 3:
+            path, mount_dir, access_type = image_split
+
+        yield path, mount_dir, access_type
+
+
+def _extract_nexe(working_dir, node, processed_images, command):
+    program_path = path.join(working_dir, 'boot.%s' % node)
+
+    with open(program_path, 'w') as program_fp:
+        # TODO: check if this file already exists
+        for zvm_image, _, _ in processed_images:
+            try:
+                tf = tarfile.open(zvm_image)
+                nexe_fp = tf.extractfile(command)
+                # once we've found the nexe the user wants to run,
+                # we're done
+                program_fp.write(nexe_fp.read())
+                return program_path
+            except KeyError:
+                # program not found in this image,
+                # go to the next and keep searching
+                pass
+            finally:
+                tf.close()
+
+
+def _write_nexe(working_dir, node, nexe_fp):
+    program_path = path.join(working_dir, 'boot.%s' % node)
+    with open(program_path, 'w') as program_fp:
+        # TODO: check if the file already exists
+        program_fp.write(nexe_fp.read())
+
+    return program_path
+
+
+def _write_manifest(working_dir, node, manifest):
+    """
+    :param manifest:
+        :class:`Manifest` instance.
+    """
+    manifest_path = path.join(working_dir, 'manifest.%s' % node)
+    with open(manifest_path, 'w') as manifest_fp:
+        # TODO: check if file already exists
+        manifest.dump(manifest_fp)
+
+    return manifest_path
+
+
+def _write_nvram(zvconfig, zvargs, processed_images, fp):
+
+    nvram_template = """\
+[args]
+args = %(args)s
+[fstab]
+%(fstab)s
+[mapping]
+%(mapping)s"""
+    # TODO: what about the option 'env' and 'debug' sections
+    # TODO: this file isn't actually a real INI file, because
+    # keys are duplicated
+
+    fstab_channels = []
+    for i, (zvm_image, mount_point, access) in enumerate(processed_images,
+                                                         start=1):
+        device = '/dev/%s.%s' % (i, path.basename(zvm_image))
+        fstab_channel = (
+            'channel=%(device)s,mountpoint=%(mount_point)s,access=%(access)s'
+            ',removable=no'
+            % dict(device=device, mount_point=mount_point, access=access)
+        )
+        fstab_channels.append(fstab_channel)
+
+    mapping = ''
+    if sys.stdin.isatty():
+        mapping += 'channel=/dev/stdin,mode=char\n'
+    if sys.stdout.isatty():
+        mapping += 'channel=/dev/stdout,mode=char\n'
+    if sys.stderr.isatty():
+        mapping += 'channel=/dev/stderr,mode=char\n'
+
+    args = [zvargs.args.command] + zvargs.args.cmd_args
+    # Commas and spaces need to be properly encoded, in order for commands like
+    # `python -c "print 42"` to work:
+    args = ['%s' % a.replace(',', '\\x2c').replace(' ', '\\x20')
+            for a in args]
+    nvram_template %= dict(
+        args=' '.join(args),
+        fstab='\n'.join(fstab_channels),
+        mapping=mapping,
+    )
+    fp.write(nvram_template)
+
 
 class ZvArgs:
+    """
+    :attr args:
+        :class:`argparse.Namespace` representing the command line arguments.
+    """
+
     def __init__(self):
         self.parser = argparse.ArgumentParser(
             formatter_class=argparse.RawTextHelpFormatter
@@ -487,8 +703,8 @@ class ZvRunner:
         self.getrc = getrc
         self.report = ''
         self.rc = -255
-        os.mkfifo(self.stdout)
-        os.mkfifo(self.stderr)
+        # os.mkfifo(self.stdout)
+        # os.mkfifo(self.stderr)
 
     def run(self):
         try:

@@ -92,7 +92,7 @@ class TestManifest:
 Node = 1
 Version = 20130611
 Timeout = 50
-Memory = 2147483648,0
+Memory = 4294967296,0
 Program = /tmp/zvsh/boot.1
 Channel = /dev/stdin,/dev/stdin,0,0,%(io_lim)s,%(io_lim)s,0,0
 Channel = /tmp/zvsh/stdout.1,/dev/stdout,0,0,0,0,%(io_lim)s,%(io_lim)s
@@ -101,9 +101,7 @@ Channel = /tmp/zvsh/nvram.1,/dev/nvram,3,0,%(io_lim)s,%(io_lim)s,%(io_lim)s,\
 %(io_lim)s"""
         expected %= dict(io_lim=io_lim)
 
-        man = zvsh.Manifest.default_manifest(
-            '/tmp/zvsh', '20130611', 50, 2147483648, '/tmp/zvsh/boot.1'
-        )
+        man = zvsh.Manifest.default_manifest('/tmp/zvsh', '/tmp/zvsh/boot.1')
         assert expected == man.dumps()
 
     def test_default_manifest_with_custom_channel(self):
@@ -111,8 +109,8 @@ Channel = /tmp/zvsh/nvram.1,/dev/nvram,3,0,%(io_lim)s,%(io_lim)s,%(io_lim)s,\
         expected = """\
 Node = 1
 Version = 20130611
-Timeout = 60
-Memory = 1073741824,0
+Timeout = 50
+Memory = 4294967296,0
 Program = /tmp/zvsh/boot.1
 Channel = /dev/stdin,/dev/stdin,0,0,%(lim)s,%(lim)s,0,0
 Channel = /tmp/zvsh/stdout.1,/dev/stdout,0,0,0,0,%(lim)s,%(lim)s
@@ -123,9 +121,7 @@ Channel = \
 /path/to/python.tar,/dev/5.python.tar,3,0,%(lim)s,%(lim)s,%(lim)s,%(lim)s"""
         expected %= dict(lim=io_lim)
 
-        man = zvsh.Manifest.default_manifest(
-            '/tmp/zvsh', '20130611', 60, 1073741824, '/tmp/zvsh/boot.1'
-        )
+        man = zvsh.Manifest.default_manifest('/tmp/zvsh', '/tmp/zvsh/boot.1')
         python_chan = zvsh.Channel(
             '/path/to/python.tar',
             '/dev/5.python.tar',

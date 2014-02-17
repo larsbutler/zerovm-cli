@@ -2,6 +2,7 @@
 import os
 import sys
 from zvshlib.zvsh import ZvArgs, DebugArgs, ZvShell, ZvRunner, ZvConfig, spawn
+from zvshlib.zvsh import run_zerovm
 
 zvsh_args = ZvArgs()
 zvsh_args.parse(sys.argv[1:])
@@ -32,16 +33,19 @@ if 'gdb' == zvsh_args.args.command:
     finally:
         zvshell.cleanup()
 else:
-    zvshell = ZvShell(config, zvsh_args.args.zvm_save_dir)
-    manifest_file = zvshell.add_arguments(zvsh_args.args)
-    zvm_run = ['zerovm', '-PQ']
-    if zvsh_args.args.zvm_trace:
-        trace_log = os.path.abspath('zvsh.trace.log')
-        zvm_run.extend(['-T', trace_log])
-    zvm_run.append(manifest_file)
-    runner = ZvRunner(zvm_run, zvshell.stdout, zvshell.stderr, zvshell.tmpdir,
-                      getrc=zvsh_args.args.zvm_getrc)
-    try:
-        runner.run()
-    finally:
-        zvshell.cleanup()
+    run_zerovm(config, zvsh_args)
+
+    #zvshell = ZvShell(config, zvsh_args.args.zvm_save_dir)
+    #manifest_file = zvshell.add_arguments(zvsh_args.args)
+    #zvm_run = ['zerovm', '-PQ']
+    #if zvsh_args.args.zvm_trace:
+    #    trace_log = os.path.abspath('zvsh.trace.log')
+    #    zvm_run.extend(['-T', trace_log])
+    #zvm_run.append(manifest_file)
+    #runner = ZvRunner(zvm_run, zvshell.stdout, zvshell.stderr, zvshell.tmpdir,
+    #                  getrc=zvsh_args.args.zvm_getrc)
+
+    #try:
+    #    runner.run()
+    #finally:
+    #    zvshell.cleanup()
