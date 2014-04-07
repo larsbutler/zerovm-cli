@@ -305,3 +305,81 @@ def test__check_runtime_files():
     # A case where none of the files exist:
     os.unlink(file_a)
     zvsh._check_runtime_files(files)
+
+
+class TestGetManifestAndNVRAM:
+    """
+    Tests for :func:`zvshlib.zvsh._get_manifest_and_nvram`.
+    """
+
+    def setup_method(self, _method):
+        self.zvconfig = dict(limits=OrderedDict([
+            ('wbytes', '4294967296'), ('rbytes', '4294967296'),
+            ('reads', '4294967296'), ('writes', '4294967296'),
+        ]))
+
+        self.zvargs = mock.Mock()
+        self.zvargs.args.zvm_image = ['hello.tar', 'data.tar']
+        self.zvargs.args.command = 'hello.nexe'
+        self.zvargs.args.cmd_args = ['foo', 'bar']
+
+        self.working_dir = '/tmp'
+
+        self.man_cfg = OrderedDict([
+            ('Node', 1), ('Version', '20130611'), ('Timeout', 50),
+            ('Memory', '4294967296'),
+        ])
+
+        self.runtime_files = OrderedDict([
+            ('boot', '/tmp/boot.1'),
+            ('manifest', '/tmp/manifest.1'),
+            ('nvram', '/tmp/nvram.1'),
+            ('stdout', '/tmp/stdout.1'),
+            ('stderr', '/tmp/stderr.1'),
+        ])
+
+        self.exp_manifest = mock.Mock()
+
+    def test(self):
+        with mock.patch('zvshlib.zvsh._extract_nexe') as extract:
+            with mock.patch('zvshlib.zvsh.create_manifest') as cm:
+                cm.return_value = self.exp_manifest
+                manifest, nvram = zvsh._get_manifest_and_nvram(
+                    self.zvconfig, self.zvargs, self.working_dir, self.man_cfg,
+                    self.runtime_files
+                )
+
+                assert extract.call_count == 0
+                assert manifest == self.exp_manifest
+
+        assert nvram.program_args == ['hello.nexe', 'foo', 'bar']
+        assert nvram.processed_images == []
+        assert nvram.env is None
+        assert nvram.debug_verbosity is None
+
+    def test_boot_from_image(self):
+        boot_from_image = True
+
+        with mock.patch('zvshlib.zvsh._extract_nexe') as extract:
+            with mock.patch('zvshlib.zvsh.create_manifest') as cm:
+                cm.return_value = self.exp_manifest
+                manifest, nvram = zvsh._get_manifest_and_nvram(
+                    self.zvconfig, self.zvargs, self.working_dir, self.man_cfg,
+                    self.runtime_files, boot_from_image=boot_from_image
+                )
+
+                assert extract.call_count == 1
+                expected_call_args = (
+                    ('/tmp/boot.1',
+                     [('hello.tar', '/', 'ro'), ('data.tar', '/', 'ro')],
+                     'hello.nexe'),
+                    {}
+                )
+                assert extract.call_args == expected_call_args
+                assert manifest == self.exp_manifest
+
+        assert nvram.program_args == ['hello.nexe', 'foo', 'bar']
+        assert nvram.processed_images == [('hello.tar', '/', 'ro'),
+                                          ('data.tar', '/', 'ro')]
+        assert nvram.env is None
+        assert nvram.debug_verbosity is None
