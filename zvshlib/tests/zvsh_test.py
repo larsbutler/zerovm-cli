@@ -15,6 +15,7 @@
 import mock
 import os
 import pytest
+import shutil
 import tempfile
 
 from collections import OrderedDict
@@ -176,22 +177,26 @@ class TestNVRAM:
     Tests for :class:`zvshlib.zvsh.NVRAM`.
     """
 
-    def test_dumps(self):
-        prog_args = ['python', '-c', 'print "hello, world"']
-        processed_images = [
+    def setup_method(self, _method):
+        self.prog_args = ['app.nexe', '-c', 'print "hello, world"']
+        self.processed_images = [
             ('/home/user1/usr.tar', '/usr', 'ro'),
             ('/home/user1/etc.tar', '/etc', 'rw'),
             ('/home/user1/tmp.tar', '/tmp', 'ro'),
         ]
-        env_dict = OrderedDict([('PATH', '/bin:/usr/bin'),
-                                ('LANG', 'en_US.UTF-8,'),
-                                ('TERM', 'vt100')])
-        nvram = zvsh.NVRAM(prog_args, processed_images, env=env_dict,
+        self.env_dict = OrderedDict([('PATH', '/bin:/usr/bin'),
+                                     ('LANG', 'en_US.UTF-8,'),
+                                     ('TERM', 'vt100')])
+
+    def test_dumps(self):
+        nvram = zvsh.NVRAM(self.prog_args,
+                           processed_images=self.processed_images,
+                           env=self.env_dict,
                            debug_verbosity=4)
 
         expected = (
             r"""[args]
-args = python -c print\x20\x22hello\x2c\x20world\x22
+args = app.nexe -c print\x20\x22hello\x2c\x20world\x22
 [fstab]
 channel=/dev/1.usr.tar,mountpoint=/usr,access=ro,removable=no
 channel=/dev/2.etc.tar,mountpoint=/etc,access=rw,removable=no
@@ -215,13 +220,45 @@ verbosity=4
                     stderr.return_value = True
                     assert nvram.dumps() == expected
 
+    def test_dumps_no_images(self):
+        # We would encounter this case when we are executing a nexe directly
+        # with zvsh/zerovm (without mounting any tar images as a file system).
+        nvram = zvsh.NVRAM(self.prog_args,
+                           processed_images=None,
+                           env=self.env_dict,
+                           debug_verbosity=4)
+
+        expected = (
+            r"""[args]
+args = app.nexe -c print\x20\x22hello\x2c\x20world\x22
+[fstab]
+
+[mapping]
+channel=/dev/stdin,mode=char
+channel=/dev/stdout,mode=char
+channel=/dev/stderr,mode=char
+[env]
+name=PATH,value=/bin:/usr/bin
+name=LANG,value=en_US.UTF-8\x2c
+name=TERM,value=vt100
+[debug]
+verbosity=4
+""")
+        with mock.patch('sys.stdin.isatty') as stdin:
+            with mock.patch('sys.stdout.isatty') as stdout:
+                with mock.patch('sys.stderr.isatty') as stderr:
+                    stdin.return_value = True
+                    stdout.return_value = True
+                    stderr.return_value = True
+                    assert nvram.dumps() == expected
+
 
 def test_create_manifest():
     # Test for :func:`zvhslib.zvsh.create_manifest`.
-    working_dir = '/tmp/abc123'
-    program_path = '/tmp/abc123/boot.2'
+    working_dir = tempfile.mkdtemp()
+    program_path = '%s/boot.2' % working_dir
     manifest_cfg = dict(Node=2, Version='20130611', Timeout=100, Memory=1024)
-    tar_files = ['/usr/share/foo.tar', '/usr/share/bar.tar']
+    tar_files = ['/usr/share/foo.tar', 'bar.tar']
     limits_cfg = dict(reads=16, rbytes=32, writes=64, wbytes=128)
 
     expected_manifest_text = """\
@@ -229,19 +266,29 @@ Node = 2
 Version = 20130611
 Timeout = 100
 Memory = 1024,0
-Program = /tmp/abc123/boot.2
+Program = %(wd)s/boot.2
 Channel = /dev/stdin,/dev/stdin,0,0,4294967296,4294967296,0,0
-Channel = /tmp/abc123/stdout.1,/dev/stdout,0,0,0,0,4294967296,4294967296
-Channel = /tmp/abc123/stderr.1,/dev/stderr,0,0,0,0,4294967296,4294967296
+Channel = %(wd)s/stdout.1,/dev/stdout,0,0,0,0,4294967296,4294967296
+Channel = %(wd)s/stderr.1,/dev/stderr,0,0,0,0,4294967296,4294967296
 Channel = \
-/tmp/abc123/nvram.1,/dev/nvram,3,0,4294967296,4294967296,4294967296,4294967296
+%(wd)s/nvram.1,/dev/nvram,3,0,4294967296,4294967296,4294967296,4294967296
 Channel = /usr/share/foo.tar,/dev/1.foo.tar,3,0,16,32,64,128
-Channel = /usr/share/bar.tar,/dev/2.bar.tar,3,0,16,32,64,128"""
+Channel = %(wd)s/bar.tar,/dev/2.bar.tar,3,0,16,32,64,128"""
 
-    manifest = zvsh.create_manifest(working_dir, program_path, manifest_cfg,
-                                    tar_files, limits_cfg)
+    expected_manifest_text %= dict(wd=working_dir)
 
-    assert manifest.dumps() == expected_manifest_text
+    try:
+        old_wd = os.getcwd()
+        os.chdir(working_dir)
+
+        manifest = zvsh.create_manifest(working_dir, program_path,
+                                        manifest_cfg, limits_cfg,
+                                        tar_files=tar_files)
+
+        assert manifest.dumps() == expected_manifest_text
+    finally:
+        os.chdir(old_wd)
+        shutil.rmtree(working_dir)
 
 
 def test__check_runtime_files():
