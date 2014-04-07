@@ -884,8 +884,6 @@ class ZvRunner:
         self.getrc = getrc
         self.report = ''
         self.rc = -255
-        os.mkfifo(self.stdout)
-        os.mkfifo(self.stderr)
 
     def run(self):
         try:
