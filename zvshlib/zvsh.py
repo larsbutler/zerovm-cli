@@ -244,11 +244,13 @@ class NVRAM(object):
         Optional. Debug verbosity level, in the range 0..4.
     """
 
-    def __init__(self, program_args, processed_images, env=None,
+    def __init__(self, program_args, processed_images=None, env=None,
                  debug_verbosity=None):
         # TODO(larsbutler): What about the [debug] and [env] sections?
         self.program_args = program_args
         self.processed_images = processed_images
+        if processed_images is None:
+            self.processed_images = []
         self.env = env
         self.debug_verbosity = debug_verbosity
 
@@ -370,8 +372,8 @@ def _process_images(zvm_images):
         yield path, mount_dir, access_type
 
 
-def create_manifest(working_dir, program_path, manifest_cfg, tar_files,
-                    limits_cfg):
+def create_manifest(working_dir, program_path, manifest_cfg, limits_cfg,
+                    tar_files=None):
     """
     :param manifest_cfg:
         `dict` containing the following keys:
@@ -388,6 +390,9 @@ def create_manifest(working_dir, program_path, manifest_cfg, tar_files,
             * writes
             * wbytes
     """
+    if tar_files is None:
+        tar_files = []
+
     manifest = Manifest.default_manifest(working_dir, program_path)
     manifest.node = manifest_cfg['Node']
     manifest.version = manifest_cfg['Version']
@@ -398,7 +403,9 @@ def create_manifest(working_dir, program_path, manifest_cfg, tar_files,
         mount_point = '/dev/%s.%s' % (i, path.basename(tar_file))
 
         ch = Channel(
-            tar_file, mount_point, access_type=RND_READ_RND_WRITE,
+            os.path.abspath(tar_file),
+            mount_point,
+            access_type=RND_READ_RND_WRITE,
             gets=limits_cfg['reads'],
             get_size=limits_cfg['rbytes'],
             puts=limits_cfg['writes'],
@@ -409,31 +416,44 @@ def create_manifest(working_dir, program_path, manifest_cfg, tar_files,
     return manifest
 
 
-def _get_runtime_file_paths(working_dir, node):
+def _get_runtime_file_paths(working_dir, node, include_boot=False):
     """
     Generate the runtime files paths for boot, manifest, nvram, stdout, and
     stderr files, and return them as a `OrderedDict` with the following
     structure:
 
     >>> _get_runtime_file_paths('/home/user1', 1)
+    OrderedDict([('manifest', '/home/user1/manifest.1'), \
+('nvram', '/home/user1/nvram.1'), \
+('stdout', '/home/user1/stdout.1'), \
+('stderr', '/home/user1/stderr.1')])
+
+    When running an application from a tar image, a boot file must be included:
+
+    >>> _get_runtime_file_paths('/home/user1', 1, include_boot=True)
     OrderedDict([('boot', '/home/user1/boot.1'), \
 ('manifest', '/home/user1/manifest.1'), \
 ('nvram', '/home/user1/nvram.1'), \
 ('stdout', '/home/user1/stdout.1'), \
 ('stderr', '/home/user1/stderr.1')])
 
+
+
     Note that that paths are created by simply joining `working_dir`, so
     relatve file paths can be used as well:
 
     >>> _get_runtime_file_paths('foo/', 1)
-    OrderedDict([('boot', 'foo/boot.1'), \
-('manifest', 'foo/manifest.1'), \
+    OrderedDict([('manifest', 'foo/manifest.1'), \
 ('nvram', 'foo/nvram.1'), \
 ('stdout', 'foo/stdout.1'), \
 ('stderr', 'foo/stderr.1')])
     """
+    files_list = ['manifest', 'nvram', 'stdout', 'stderr']
+    if include_boot:
+        files_list.insert(0, 'boot')
+
     files = OrderedDict()
-    for each in ('boot', 'manifest', 'nvram', 'stdout', 'stderr'):
+    for each in files_list:
         files[each] = path.join(working_dir, '%s.%s' % (each, node))
 
     return files
@@ -451,13 +471,72 @@ def _check_runtime_files(runtime_files):
                                % file_path)
 
 
-def run_zerovm(zvconfig, zvargs):
+def _get_manifest_and_nvram(zvconfig, zvargs, working_dir, man_cfg,
+                            runtime_files, boot_from_image=False):
+    """
+    Create :class:`Manifest` and :class:`NVRAM` instances.
+
+    :param zvconfig:
+        :class:`ZvConfig` instance.
+    :param zvargs:
+        :class:`ZvArgs` instance.
+    :param str working_dir:
+        Working directory path.
+    :param man_cfg:
+        Manifest config `dict`-like, with the following keys::
+
+            * Node
+            * Version
+            * Timeout
+            * Memory
+
+    :param runtime_files:
+        `dict`-like containing paths to ZeroVM runtime files. Keys are as
+        follows::
+
+            * boot (optional)
+            * manifest
+            * nvram
+            * stdout
+            * stderr
+    :param bool boot_from_image:
+        If an application is run in the mode where a tar image is mounted as a
+        file system, set this option to `True` to handle the additional
+        processing of tar image files.
+    """
+    if boot_from_image:
+        processed_images = list(_process_images(zvargs.args.zvm_image))
+
+        # Search the tar images and extract the target nexe to the specified
+        # file (runtime_files['boot'])
+        _extract_nexe(runtime_files['boot'], processed_images,
+                      zvargs.args.command)
+
+        # Just the tar files:
+        tar_files = [x[0] for x in processed_images]
+        manifest = create_manifest(working_dir, runtime_files['boot'], man_cfg,
+                                   zvconfig['limits'], tar_files=tar_files)
+
+    else:
+        processed_images = None
+        manifest = create_manifest(working_dir, zvargs.args.command, man_cfg,
+                                   zvconfig['limits'])
+
+    nvram = NVRAM([zvargs.args.command] + zvargs.args.cmd_args,
+                  processed_images=processed_images)
+
+    return manifest, nvram
+
+
+def run_zerovm(zvconfig, zvargs, gdb=False):
     """
     :param zvconfig:
         :class:`ZvConfig` instance.
     :param zvargs:
         :class:`ZvArgs` instance.
     """
+    boot_from_image = zvargs.args.zvm_image is not None
+
     if zvargs.args.zvm_save_dir is None:
         # use a temp dir
         working_dir = mkdtemp()
@@ -472,7 +551,8 @@ def run_zerovm(zvconfig, zvargs):
     node = man_cfg['Node']
 
     # These files will be generated in the `working_dir`.
-    runtime_files = _get_runtime_file_paths(working_dir, node)
+    runtime_files = _get_runtime_file_paths(working_dir, node,
+                                            include_boot=boot_from_image)
     # If any of these files already exist in the target dir,
     # we need to raise an error and halt.
     _check_runtime_files(runtime_files)
@@ -480,26 +560,13 @@ def run_zerovm(zvconfig, zvargs):
     os.mkfifo(runtime_files['stdout'])
     os.mkfifo(runtime_files['stderr'])
 
-    processed_images = list(_process_images(zvargs.args.zvm_image))
-    # expand the tar image paths to absolute paths.
-    processed_images = [(path.abspath(tar_path), mp, access)
-                        for tar_path, mp, access in processed_images]
-    # Just the tar files:
-    tar_files = [x[0] for x in processed_images]
+    manifest, nvram = _get_manifest_and_nvram(zvconfig, zvargs, working_dir,
+                                              man_cfg, runtime_files,
+                                              boot_from_image=boot_from_image)
 
-    # Search the tar images and extract the target nexe to the specified file
-    # (runtime_files['boot'])
-    _extract_nexe(runtime_files['boot'], processed_images, zvargs.args.command)
-
-    # Generate and write the manifest file:
-    manifest = create_manifest(working_dir, runtime_files['boot'], man_cfg,
-                               tar_files, zvconfig['limits'])
     with open(runtime_files['manifest'], 'w') as man_fp:
         man_fp.write(manifest.dumps())
 
-    # Generate and write the nvram file:
-    nvram = NVRAM([zvargs.args.command] + zvargs.args.cmd_args,
-                  processed_images)
     with open(runtime_files['nvram'], 'w') as nvram_fp:
         nvram_fp.write(nvram.dumps())
 
