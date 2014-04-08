@@ -252,6 +252,75 @@ verbosity=4
                     stderr.return_value = True
                     assert nvram.dumps() == expected
 
+    def test_dumps_with_at_channel(self):
+        # Test case using the `@somefile.ext` for creating channels
+        prog_args = ['app.nexe', '@foo.py']
+        nvram = zvsh.NVRAM(prog_args,
+                           processed_images=None,
+                           env=self.env_dict,
+                           debug_verbosity=4)
+
+        expected = (
+            r"""[args]
+args = app.nexe /dev/1.foo.py
+[fstab]
+
+[mapping]
+channel=/dev/stdin,mode=char
+channel=/dev/stdout,mode=char
+channel=/dev/stderr,mode=char
+channel=/dev/1.foo.py,mode=file
+[env]
+name=PATH,value=/bin:/usr/bin
+name=LANG,value=en_US.UTF-8\x2c
+name=TERM,value=vt100
+[debug]
+verbosity=4
+""")
+        with mock.patch('sys.stdin.isatty') as stdin:
+            with mock.patch('sys.stdout.isatty') as stdout:
+                with mock.patch('sys.stderr.isatty') as stderr:
+                    stdin.return_value = True
+                    stdout.return_value = True
+                    stderr.return_value = True
+                    assert nvram.dumps() == expected
+
+    def test_dumps_with_at_channel_and_images(self):
+        # Test case using the `@somefile.ext` for creating channels
+        # Also includes some tar images to mount
+        prog_args = ['app.nexe', '@foo.py']
+        nvram = zvsh.NVRAM(prog_args,
+                           processed_images=self.processed_images,
+                           env=self.env_dict,
+                           debug_verbosity=4)
+
+        expected = (
+            r"""[args]
+args = app.nexe /dev/1.foo.py
+[fstab]
+channel=/dev/2.usr.tar,mountpoint=/usr,access=ro,removable=no
+channel=/dev/3.etc.tar,mountpoint=/etc,access=rw,removable=no
+channel=/dev/4.tmp.tar,mountpoint=/tmp,access=ro,removable=no
+[mapping]
+channel=/dev/stdin,mode=char
+channel=/dev/stdout,mode=char
+channel=/dev/stderr,mode=char
+channel=/dev/1.foo.py,mode=file
+[env]
+name=PATH,value=/bin:/usr/bin
+name=LANG,value=en_US.UTF-8\x2c
+name=TERM,value=vt100
+[debug]
+verbosity=4
+""")
+        with mock.patch('sys.stdin.isatty') as stdin:
+            with mock.patch('sys.stdout.isatty') as stdout:
+                with mock.patch('sys.stderr.isatty') as stderr:
+                    stdin.return_value = True
+                    stdout.return_value = True
+                    stderr.return_value = True
+                    assert nvram.dumps() == expected
+
 
 def test_create_manifest():
     # Test for :func:`zvhslib.zvsh.create_manifest`.
