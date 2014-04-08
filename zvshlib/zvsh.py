@@ -260,15 +260,6 @@ class NVRAM(object):
         """
         nvram_text = NVRAM_TEMPLATE
         fstab_channels = []
-        for i, (zvm_image, mount_point, access) in enumerate(
-                self.processed_images, start=1):
-            device = '/dev/%s.%s' % (i, path.basename(zvm_image))
-            fstab_channel = (
-                'channel=%(device)s,mountpoint=%(mount_point)s,'
-                'access=%(access)s,removable=no'
-                % dict(device=device, mount_point=mount_point, access=access)
-            )
-            fstab_channels.append(fstab_channel)
 
         mapping = ''
         if sys.stdin.isatty():
@@ -278,12 +269,42 @@ class NVRAM(object):
         if sys.stderr.isatty():
             mapping += 'channel=/dev/stderr,mode=char\n'
 
+        channel_count = 0
+        # make a local copy of these, since we might might modify them below
+        prog_args = list(self.program_args)
+        # Create channels for files specified on the command line with the `@`
+        # prefix.
+
+        for i, arg in enumerate(prog_args):
+            # strip off the leading '@'
+            if arg.startswith('@'):
+                device = '/dev/%(num)s.%(name)s' % dict(
+                    num=channel_count + 1,
+                    name=arg[1:]  # strip the leading '@'
+                )
+                # update the program arguments for the NVRAM file:
+                prog_args[i] = device
+
+                mapping += ('channel=%(device)s,mode=file\n'
+                            % dict(device=device))
+                channel_count += 1
+
+        for i, (zvm_image, mount_point, access) in enumerate(
+                self.processed_images, start=channel_count + 1):
+            device = '/dev/%s.%s' % (i, path.basename(zvm_image))
+            fstab_channel = (
+                'channel=%(device)s,mountpoint=%(mount_point)s,'
+                'access=%(access)s,removable=no'
+                % dict(device=device, mount_point=mount_point, access=access)
+            )
+            fstab_channels.append(fstab_channel)
+
         # When ZRT presents a program with its argv, it parses the
         # nvram file. This parser is very simple. It will choke on ','
         # (it treats comma the same as newline) and it will split the
         # command line on ' '. We must therefore escape each argument
         # individually before joining them.
-        args = ' '.join(map(_nvram_escape, self.program_args))
+        args = ' '.join(map(_nvram_escape, prog_args))
 
         nvram_text %= dict(
             args=args,
