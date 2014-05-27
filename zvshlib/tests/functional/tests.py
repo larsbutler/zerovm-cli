@@ -130,8 +130,8 @@ class TestZvsh(unittest.TestCase):
             with pytest.raises(SystemExit):
                 shell.run()
             files = os.listdir(shell.zvsh.tmpdir)
-            self.assertTrue('manifest.1' in files)
-            self.assertTrue('nvram.1' in files)
+            assert 'manifest.1' in files
+            assert 'nvram.1' in files
             manifest = _read_manifest(join_path(shell.zvsh.tmpdir,
                                                 'manifest.1'))
             reference = self._reference_manifest(shell.zvsh.tmpdir)
@@ -152,8 +152,8 @@ class TestZvsh(unittest.TestCase):
             with pytest.raises(SystemExit):
                 shell.run()
             files = os.listdir(shell.zvsh.tmpdir)
-            self.assertTrue('manifest.1' in files)
-            self.assertTrue('nvram.1' in files)
+            assert 'manifest.1' in files
+            assert 'nvram.1' in files
             manifest = _read_manifest(join_path(shell.zvsh.tmpdir,
                                                 'manifest.1'))
             reference = self._reference_manifest(shell.zvsh.tmpdir)
@@ -178,8 +178,8 @@ class TestZvsh(unittest.TestCase):
             with pytest.raises(SystemExit):
                 shell.run()
             files = os.listdir(shell.zvsh.tmpdir)
-            self.assertTrue('manifest.1' in files)
-            self.assertTrue('nvram.1' in files)
+            assert 'manifest.1' in files
+            assert 'nvram.1' in files
             manifest = _read_manifest(join_path(shell.zvsh.tmpdir,
                                                 'manifest.1'))
             reference = self._reference_manifest(shell.zvsh.tmpdir)
@@ -217,8 +217,8 @@ class TestZvsh(unittest.TestCase):
             with pytest.raises(SystemExit):
                 shell.run()
             files = os.listdir(shell.zvsh.tmpdir)
-            self.assertTrue('manifest.1' in files)
-            self.assertTrue('nvram.1' in files)
+            assert 'manifest.1' in files
+            assert 'nvram.1' in files
             manifest = _read_manifest(join_path(shell.zvsh.tmpdir,
                                                 'manifest.1'))
             reference = self._reference_manifest(shell.zvsh.tmpdir)
@@ -262,8 +262,8 @@ class TestZvsh(unittest.TestCase):
             with pytest.raises(SystemExit):
                 shell.run()
             files = os.listdir(shell.zvsh.tmpdir)
-            self.assertTrue('manifest.1' in files)
-            self.assertTrue('nvram.1' in files)
+            assert 'manifest.1' in files
+            assert 'nvram.1' in files
             manifest = _read_manifest(join_path(shell.zvsh.tmpdir,
                                                 'manifest.1'))
             reference = self._reference_manifest(shell.zvsh.tmpdir)
